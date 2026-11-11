@@ -5,8 +5,11 @@ A USD asset of the Holybro X500 quadrotor, converted from the PX4 Gazebo model
 
 ![preview](docs/preview.png)
 
-**Status: built and checked with OpenUSD only. It has not been loaded in Isaac
-Sim yet** — see [Before you rely on it](#before-you-rely-on-it).
+**Status: loaded and checked against a real Isaac Sim 6.0.0** (headless,
+2026-11-12) — it drops onto its skids under gravity and settles exactly
+where the geometry says it should. See
+[Before you rely on it](#before-you-rely-on-it) for exactly what that
+covered and what's still open (Pegasus/PX4 specifically, RTX materials).
 
 ## Use it
 
@@ -78,12 +81,20 @@ Checked here, without Isaac Sim (`scripts/validate_x500.py`):
 - all references and textures resolve; every mesh has a material
 - geometry placement, by eye, from `docs/preview.png`
 
-Not checked — do this once in Isaac Sim:
+**Confirmed against a live Isaac Sim 6.0.0** (headless, referenced into a
+fresh stage the documented way below, with a ground plane added): falls
+under gravity and settles at z = 0.2270 m starting from z = 1.0 m — the
+documented 0.227 m skid offset, to the decimal — over 60 physics steps
+with nothing diverging.
 
-1. Open `x500/x500.usda`, press Play on a ground plane: it should drop onto
-   its skids and stay still.
+Still not checked — do this once, with a GUI:
+
+1. Open `x500/x500.usda`, press Play: watch it land and stay still rather
+   than just checking the final height numerically.
 2. Look at the materials under RTX.
-3. Run the Pegasus example and take off.
+3. Run the Pegasus example and take off (PX4 MAVLink specifically is
+   unconfirmed — see `sensors/README.md`'s compatibility notes, which
+   apply to the base vehicle's flight loop too, just at lower risk).
 
 ## Rebuild
 

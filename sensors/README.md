@@ -23,12 +23,12 @@ keep its folder (mesh + textures) alongside it. Rebuild with
 Both the mast height on the 2D lidar and the camera's height are PX4's own
 numbers, reproduced exactly — not something tuned for this project.
 
-**Status, same as the base vehicle: built and checked with OpenUSD only,
-not loaded in Isaac Sim.** The physics-composition checks
-(`validate_sensor_variant.py`) are solid; the sensor-specific attributes
-(`OmniSensorGenericLidarCoreAPI`, the camera's focal length under RTX) can
-only be confirmed by Isaac Sim itself — see **What's authored vs. what's
-confirmed** below.
+**Status: loaded and checked against a real Isaac Sim 6.0.0** (headless,
+2026-11-12) — see **What's authored vs. what's confirmed** below for
+exactly what that covered and what it didn't. Two real authoring mistakes
+turned up and were fixed that way, not by guessing twice; the lidar and
+camera prims here have been run through `Lidar()`/`RtxCamera()`, not just
+built and hoped for.
 
 ## The feasibility question: can PX4-in-sim actually use these?
 
@@ -90,20 +90,23 @@ wiring them the same way in sim — RTX lidar / RTX camera → ROS 2
 publishers) — tests the real architecture instead of a simulation-only
 shortcut. This sidesteps Pegasus's graphical-sensor classes entirely by
 using Isaac Sim 6's own `isaacsim.sensors.experimental.rtx` APIs directly,
-which is what Isaac Sim 6 itself documents as current. Not implemented
-here yet (no ROS 2 to test against in this sandbox); the USD side (camera
-prim, lidar prim with the real PX4 beam pattern) is ready for it.
+which is what Isaac Sim 6 itself documents as current, and both prims are
+now confirmed to load through it (`Lidar()`, `RtxCamera()` — see **What's
+authored vs. what's confirmed**). The ROS 2 publishing side itself (the
+writer/`ROS2PublishPointCloud` wiring) is not implemented here — no ROS 2
+to test against on the machine this was built on.
 
-### If you'd rather avoid the RTX/Pegasus uncertainty entirely for the 2D lidar
+### If you'd rather avoid the RTX pipeline entirely for the 2D lidar
 
 A straight-down raycast is simple because it's one ray. A 1080-beam scan
 is not something to re-implement as 1080 raycasts per frame without a
-reason to. If the RTX lidar path turns out not to work on your Isaac Sim 6
-install, the fallback is a PhysX `raycast_closest` sweep across the same
-1080 angles (same primitive `examples/distance_sensor_backend.py` uses),
-which is slower and less physically accurate (no multi-return, no
-material-based intensity) but has no dependency on RTX sensor APIs at all.
-Worth knowing about, not written here — try the RTX path first.
+reason to, and the RTX lidar path is now confirmed to load, so there's
+less reason to avoid it than there was. If you still want to: the
+fallback is a PhysX `raycast_closest` sweep across the same 1080 angles
+(same primitive `examples/distance_sensor_backend.py` uses), which is
+slower and less physically accurate (no multi-return, no material-based
+intensity) but has no dependency on RTX sensor APIs at all. Worth knowing
+about, not written here.
 
 ## Other sensor options, for later
 
@@ -126,34 +129,55 @@ Not built here, in rough order of how much they'd add for a delivery UAV:
 
 ## What's authored vs. what's confirmed
 
-Same split as the main README, extended to the sensor-specific pieces:
+**Confirmed against a live Isaac Sim 6.0.0** (headless, no GUI, run via a
+Windows install through WSL interop — see the commit that updated this
+section for the exact scripts):
 
-**Checked here** (`scripts/validate_sensor_variant.py`, no Isaac Sim):
-physics composition (one articulation root, every accessory body massed,
-collided and jointed to the airframe), references/textures resolve, and —
-this repo's own authoring only, not Isaac Sim's interpretation of it — the
-lidar emitter arrays and camera focal length/aperture are present, equal
-length, and in range.
+1. The base vehicle, all three accessories and `full_stack.usda` all open
+   cleanly with `ArticulationRootAPI` intact.
+2. The base vehicle, referenced into a fresh stage the documented way
+   (`add_reference_to_stage`) with a ground plane, falls under gravity and
+   settles at **z = 0.2270 m** starting from z = 1.0 m — matching the
+   documented 0.227 m skid offset almost to the decimal, over 60 physics
+   steps with nothing diverging.
+3. `isaacsim.sensors.experimental.rtx.Lidar("/x500/.../sensor")` wraps both
+   the 1-beam and the 1080-beam lidar prims without error. **This needed a
+   fix**: the first version authored a plain `Xform` with
+   `OmniSensorGenericLidarCoreAPI` applied, following the isaac-sim-sensor
+   skill's documentation literally — `Lidar()` actually requires the
+   prim's USD type itself to be `OmniLidar`, and several attribute names
+   the skill's example showed (`minRange`, `maxRange`, `horizontalFov`,
+   `horizontalResolution`, `verticalFov`, `verticalResolution`, `highLod`,
+   `drawPoints`) don't exist in the real schema at all — confirmed absent
+   from a ~70-attribute dump of a reference lidar `Lidar.create()` built
+   itself. The real range attributes are
+   `omni:sensor:Core:nearRangeM`/`farRangeM`. The emitter-state attribute
+   names and the applied-schema token were already right the first time.
+4. `isaacsim.sensors.experimental.rtx.RtxCamera("/x500/body/cameras/rgb")`
+   wraps the camera prim without error, and a `CameraSensor` built on top
+   of it returns non-`None` frame data after a few sim ticks. **Also
+   needed a fix**: `RtxCamera()` requires `OmniSensorAPI` applied to the
+   camera prim, which the first version didn't have. (Returning
+   non-`None` data is a weaker signal than the other three checks here —
+   it wasn't inspected for being a genuine non-empty image versus an
+   early placeholder buffer.)
+5. The camera prims' optical axis is correct: read back from a live
+   stage, `look_dir=(1,0,0)` and `up_dir=(0,0,1)` — exactly body-forward
+   and level, confirming `_usd_common.FORWARD_CAMERA_ROTATION` (derived by
+   hand, previously verified only in a unit test, not against Isaac Sim).
 
-**Needs an Isaac Sim 6 load to confirm:**
+**Still not confirmed:**
 
-1. The vehicle still flies under Pegasus (per the main README — unchanged
-   by adding sensors).
-2. `OmniSensorGenericLidarCoreAPI` is a proprietary Kit schema, not part of
-   open-source USD — it isn't registered in the `usd-core` this was built
-   with, so the schema name and attribute names below were authored
-   exactly as Isaac Sim's own agent-skill documentation states them, but
-   never round-tripped through the real schema plugin. If it doesn't load
-   cleanly, that's the first thing to check against Isaac Sim 6's current
-   docs.
-3. The camera prims' optical axis: derived from the fixed rotation between
-   USD/OpenGL camera convention (looks down -Z) and the ROS/Gazebo optical
-   convention PX4's SDF camera sensors use (looks down local +X, matching
-   the x500 body's forward axis when unrotated) — worked out and
-   numerically verified in this repo (`_usd_common.FORWARD_CAMERA_ROTATION`
-   and `matrix_to_quat`'s own test battery), not confirmed against a
-   rendered Isaac Sim frame.
-4. `examples/distance_sensor_backend.py`, as stated above.
+1. The vehicle flying under **Pegasus Simulator** specifically (PX4
+   MAVLink, rotor thrust from motor commands) — everything above used
+   Isaac Sim's plain physics/sensor APIs directly, not Pegasus. The
+   Pegasus-specific compatibility concerns below are still reasoned from
+   reading Pegasus's source, not from running it.
+2. `examples/distance_sensor_backend.py` — no PX4 SITL instance was run
+   against this.
+3. The 2D lidar's actual point cloud / the camera's actual image content
+   looking correct, as opposed to the wrapper classes accepting the prims
+   without error.
 
 ## License
 
