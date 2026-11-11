@@ -56,6 +56,18 @@ below it.
   authored without Isaac Sim. Tools that need it can add it with
   `usd.schema.isaac.robot_schema.ApplyRobotAPI` (robot type `Aerial`).
 
+## Sensor accessories
+
+`sensors/` adds a downward rangefinder, a forward 270° planar lidar and a
+forward RGB/depth camera, each as its own additive USD layer on top of this
+vehicle (or combined, via `sensors/full_stack.usda`). See
+[`sensors/README.md`](sensors/README.md) — it also covers a real
+compatibility gap for PX4-in-the-loop testing: Pegasus Simulator's shipped
+camera and lidar sensor classes target a pre-6.0 Isaac Sim API and are, in
+the lidar's case, not even enabled in Pegasus's own package.
+
+![sensor accessories preview](docs/sensors/full_stack_preview.png)
+
 ## Before you rely on it
 
 Checked here, without Isaac Sim (`scripts/validate_x500.py`):
@@ -92,7 +104,10 @@ python scripts/render_preview.py
 ```
 
 `build_x500.py` downloads the PX4 meshes into `.cache/` and regenerates
-`x500/`. Change numbers in the script, not in the generated `.usda`.
+`x500/`. Change numbers in the script, not in the generated `.usda`. Same
+pattern for each sensor accessory: `python sensors/<name>/build.py`, then
+`python scripts/validate_sensor_variant.py sensors/<name>/<name>.usda` —
+see [`sensors/README.md`](sensors/README.md).
 
 ## Add it to a project
 

@@ -1,0 +1,19 @@
+#usda 1.0
+(
+    """X500 with all three sensor accessories at once: downward rangefinder,
+    forward 2D lidar and forward camera/depth. Combines the three additive
+    layers by sublayering them (each already references ../x500/x500.usda
+    at /x500, and USD composes repeated references to the same prim path
+    in the same asset without duplication - verified, not just assumed,
+    see the repo's test in the commit that added this file).
+
+    Pick a subset of sublayers below instead of all three if a vehicle
+    only needs some of them; order does not matter here since the three
+    accessories do not touch the same prims."""
+    defaultPrim = "x500"
+    subLayers = [
+        @./lidar_down/lidar_down.usda@,
+        @./lidar_2d_front/lidar_2d_front.usda@,
+        @./camera_depth/camera_depth.usda@,
+    ]
+)

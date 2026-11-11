@@ -21,11 +21,27 @@ from __future__ import annotations
 import argparse
 import math
 import shutil
+import sys
 import urllib.request
 from pathlib import Path
 
 import numpy as np
-from pxr import Gf, Sdf, Tf, Usd, UsdGeom, UsdPhysics, UsdShade, Vt
+from pxr import Gf, Sdf, Usd, UsdGeom, UsdPhysics
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _usd_common import (  # noqa: E402
+    add_collider,
+    add_mass,
+    add_visual as _add_visual_ref,
+    bind,
+    collada_prototype,
+    define_material,
+    define_mesh,
+    read_stl,
+    rpy_matrix,
+    rpy_quat,
+    set_pose,
+)
 
 REPO = Path(__file__).resolve().parent.parent
 RAW = "https://raw.githubusercontent.com/PX4/PX4-gazebo-models/main/models/x500_base/"
@@ -98,24 +114,9 @@ BODY_COLLIDERS = [
     ("skid_left", (0, 0.132, -0.2195), (0, 0, 0), (0.25, 0.015, 0.015)),
 ]
 
-# Lambert colours in the DAE files carry no roughness/metalness; these are
-# hand-picked so the frame does not look like plastic everywhere.
-SURFACE_HINTS = {
-    "CarbonFiber": (0.35, 0.0),
-    "Metal": (0.35, 1.0),
-    "LandingRubber": (0.9, 0.0),
-    "RailsRubber": (0.9, 0.0),
-    "FMURubber": (0.8, 0.0),
-    "LandingFoam": (1.0, 0.0),
-    "MotorMetal": (0.4, 1.0),
-    "MotorDark": (0.5, 0.6),
-    "Propeller": (0.45, 0.0),
-}
-DEFAULT_SURFACE = (0.6, 0.0)
-
-
 # --------------------------------------------------------------------------
-# helpers
+# helpers (rpy_quat, rpy_matrix, set_pose, weld, define_mesh, define_material,
+# bind, read_stl, collada_prototype all come from _usd_common now)
 # --------------------------------------------------------------------------
 def fetch_sources(cache: Path) -> Path:
     cache.mkdir(parents=True, exist_ok=True)
@@ -127,160 +128,9 @@ def fetch_sources(cache: Path) -> Path:
     return cache
 
 
-def rpy_quat(rpy) -> Gf.Quatd:
-    """SDF roll-pitch-yaw (fixed axes X, Y, Z) to a quaternion."""
-    r, p, y = rpy
-    # Gf.Rotation composes left-to-right: the leftmost rotation is applied first.
-    q = (
-        Gf.Rotation(Gf.Vec3d(1, 0, 0), math.degrees(r))
-        * Gf.Rotation(Gf.Vec3d(0, 1, 0), math.degrees(p))
-        * Gf.Rotation(Gf.Vec3d(0, 0, 1), math.degrees(y))
-    )
-    return q.GetQuat()
-
-
-def rpy_matrix(rpy) -> np.ndarray:
-    r, p, y = rpy
-    cr, sr, cp, sp, cy, sy = math.cos(r), math.sin(r), math.cos(p), math.sin(p), math.cos(y), math.sin(y)
-    rx = np.array([[1, 0, 0], [0, cr, -sr], [0, sr, cr]])
-    ry = np.array([[cp, 0, sp], [0, 1, 0], [-sp, 0, cp]])
-    rz = np.array([[cy, -sy, 0], [sy, cy, 0], [0, 0, 1]])
-    return rz @ ry @ rx
-
-
-def set_pose(prim, xyz=(0, 0, 0), quat=Gf.Quatd(1, 0, 0, 0), scale=(1, 1, 1)):
-    """Author the translate / orient / scale op stack Isaac Sim expects."""
-    xf = UsdGeom.Xformable(prim)
-    xf.ClearXformOpOrder()
-    xf.AddTranslateOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(*xyz))
-    xf.AddOrientOp(UsdGeom.XformOp.PrecisionDouble).Set(quat)
-    xf.AddScaleOp(UsdGeom.XformOp.PrecisionDouble).Set(Gf.Vec3d(*scale))
-
-
-def weld(points, normals, pidx, nidx, uvs=None, uvidx=None):
-    """Collapse per-corner (position, normal, uv) index tuples into unique vertices."""
-    cols = [pidx.reshape(-1), nidx.reshape(-1)]
-    if uvs is not None:
-        cols.append(uvidx.reshape(-1))
-    keys = np.stack(cols, axis=1)
-    uniq, inverse = np.unique(keys, axis=0, return_inverse=True)
-    out_uv = uvs[uniq[:, 2]] if uvs is not None else None
-    return points[uniq[:, 0]], normals[uniq[:, 1]], inverse.reshape(-1), out_uv
-
-
-def define_mesh(stage, path, points, normals, indices, uvs=None, double_sided=False):
-    mesh = UsdGeom.Mesh.Define(stage, path)
-    pts = np.asarray(points, dtype=np.float32)
-    mesh.CreatePointsAttr(Vt.Vec3fArray.FromNumpy(pts))
-    mesh.CreateFaceVertexIndicesAttr(Vt.IntArray.FromNumpy(np.asarray(indices, dtype=np.int32)))
-    mesh.CreateFaceVertexCountsAttr(Vt.IntArray(len(indices) // 3, 3))
-    mesh.CreateSubdivisionSchemeAttr(UsdGeom.Tokens.none)
-    mesh.CreateNormalsAttr(Vt.Vec3fArray.FromNumpy(np.asarray(normals, dtype=np.float32)))
-    mesh.SetNormalsInterpolation(UsdGeom.Tokens.vertex)
-    mesh.CreateExtentAttr([Gf.Vec3f(*pts.min(axis=0).tolist()), Gf.Vec3f(*pts.max(axis=0).tolist())])
-    if double_sided:
-        mesh.CreateDoubleSidedAttr(True)
-    if uvs is not None:
-        st = UsdGeom.PrimvarsAPI(mesh).CreatePrimvar(
-            "st", Sdf.ValueTypeNames.TexCoord2fArray, UsdGeom.Tokens.vertex
-        )
-        st.Set(Vt.Vec2fArray.FromNumpy(np.asarray(uvs, dtype=np.float32)))
-    return mesh
-
-
-def define_material(stage, path, name, color=None, texture=None):
-    """UsdPreviewSurface material: renders in Isaac Sim without any MDL."""
-    roughness, metallic = SURFACE_HINTS.get(name, DEFAULT_SURFACE)
-    mat = UsdShade.Material.Define(stage, path)
-    shader = UsdShade.Shader.Define(stage, path.AppendChild("Shader"))
-    shader.CreateIdAttr("UsdPreviewSurface")
-    shader.CreateInput("roughness", Sdf.ValueTypeNames.Float).Set(roughness)
-    shader.CreateInput("metallic", Sdf.ValueTypeNames.Float).Set(metallic)
-    diffuse = shader.CreateInput("diffuseColor", Sdf.ValueTypeNames.Color3f)
-    if texture:
-        reader = UsdShade.Shader.Define(stage, path.AppendChild("stReader"))
-        reader.CreateIdAttr("UsdPrimvarReader_float2")
-        reader.CreateInput("varname", Sdf.ValueTypeNames.String).Set("st")
-        tex = UsdShade.Shader.Define(stage, path.AppendChild("diffuseTexture"))
-        tex.CreateIdAttr("UsdUVTexture")
-        tex.CreateInput("file", Sdf.ValueTypeNames.Asset).Set(Sdf.AssetPath(f"./textures/{texture}"))
-        tex.CreateInput("sourceColorSpace", Sdf.ValueTypeNames.Token).Set("sRGB")
-        tex.CreateInput("wrapS", Sdf.ValueTypeNames.Token).Set("repeat")
-        tex.CreateInput("wrapT", Sdf.ValueTypeNames.Token).Set("repeat")
-        tex.CreateInput("st", Sdf.ValueTypeNames.Float2).ConnectToSource(
-            reader.CreateOutput("result", Sdf.ValueTypeNames.Float2)
-        )
-        diffuse.ConnectToSource(tex.CreateOutput("rgb", Sdf.ValueTypeNames.Float3))
-    else:
-        diffuse.Set(Gf.Vec3f(*color))
-    mat.CreateSurfaceOutput().ConnectToSource(shader.ConnectableAPI(), "surface")
-    return mat
-
-
-def bind(prim, material):
-    UsdShade.MaterialBindingAPI.Apply(prim).Bind(material)
-
-
-def read_stl(path: Path):
-    """Binary STL -> welded points, smooth-ish normals, triangle indices."""
-    raw = path.read_bytes()
-    count = int(np.frombuffer(raw, dtype="<u4", count=1, offset=80)[0])
-    rec = np.dtype([("n", "<f4", 3), ("v", "<f4", (3, 3)), ("attr", "<u2")])
-    tris = np.frombuffer(raw, dtype=rec, count=count, offset=84)
-    corners = tris["v"].reshape(-1, 3).astype(np.float64)
-    points, indices = np.unique(np.round(corners, 7), axis=0, return_inverse=True)
-    faces = indices.reshape(-1, 3)
-    a, b, c = points[faces[:, 0]], points[faces[:, 1]], points[faces[:, 2]]
-    face_n = np.cross(b - a, c - a)  # length = 2 * area, so this area-weights
-    normals = np.zeros_like(points)
-    for k in range(3):
-        np.add.at(normals, faces[:, k], face_n)
-    length = np.linalg.norm(normals, axis=1, keepdims=True)
-    normals /= np.where(length > 0, length, 1)
-    return points, normals, faces.reshape(-1)
-
-
 # --------------------------------------------------------------------------
 # geometries.usdc
 # --------------------------------------------------------------------------
-def collada_prototype(stage, root, src: Path, rename=None, surface=None):
-    """Convert one .dae into root/<mesh> children with their own root/Looks."""
-    import collada
-
-    dae = collada.Collada(str(src))
-    assert dae.assetInfo.upaxis == "Z_UP" and dae.assetInfo.unitmeter == 1.0, src
-    looks = root.GetPath().AppendChild("Looks")
-    UsdGeom.Scope.Define(stage, looks)
-    tris_total = 0
-    for bound in dae.scene.objects("geometry"):
-        for prim in bound.primitives():
-            if type(prim).__name__ != "BoundTriangleSet" or len(prim) == 0:
-                continue  # the frame DAE has a stray line set
-            effect = prim.material.effect
-            textured = not isinstance(effect.diffuse, tuple)
-            name = (rename or {}).get(prim.material.name, prim.material.name)
-            name = Tf.MakeValidIdentifier(name)
-            pts, nrm, idx, uv = weld(
-                prim.vertex,
-                prim.normal,
-                prim.vertex_index,
-                prim.normal_index,
-                prim.texcoordset[0] if textured else None,
-                prim.texcoord_indexset[0] if textured else None,
-            )
-            mesh = define_mesh(stage, root.GetPath().AppendChild(name), pts, nrm, idx, uv)
-            mat = define_material(
-                stage,
-                looks.AppendChild(name),
-                (surface or {}).get(name, name),
-                color=None if textured else effect.diffuse[:3],
-                texture=Path(effect.diffuse.sampler.surface.image.path).name if textured else None,
-            )
-            bind(mesh.GetPrim(), mat)
-            tris_total += len(prim)
-    return tris_total
-
-
 def build_geometries(src: Path, out: Path):
     stage = Usd.Stage.CreateNew(str(out))
     UsdGeom.SetStageUpAxis(stage, UsdGeom.Tokens.z)
@@ -348,26 +198,7 @@ def build_geometries(src: Path, out: Path):
 # x500.usda
 # --------------------------------------------------------------------------
 def add_visual(stage, path, proto, xyz=(0, 0, 0), quat=Gf.Quatd(1, 0, 0, 0)):
-    prim = UsdGeom.Xform.Define(stage, path).GetPrim()
-    prim.GetReferences().AddReference("./geometries.usdc", f"/Geometries/{proto}")
-    prim.SetInstanceable(True)
-    set_pose(prim, xyz, quat)
-    return prim
-
-
-def add_collider(stage, path, shape, xyz=(0, 0, 0), quat=Gf.Quatd(1, 0, 0, 0), scale=(1, 1, 1)):
-    shape.CreatePurposeAttr(UsdGeom.Tokens.guide)  # hidden in renders, visible in debug views
-    UsdPhysics.CollisionAPI.Apply(shape.GetPrim())
-    set_pose(shape.GetPrim(), xyz, quat, scale)
-
-
-def add_mass(prim, mass, inertia):
-    UsdPhysics.RigidBodyAPI.Apply(prim)
-    api = UsdPhysics.MassAPI.Apply(prim)
-    api.CreateMassAttr(mass)
-    api.CreateCenterOfMassAttr(Gf.Vec3f(0, 0, 0))
-    api.CreateDiagonalInertiaAttr(Gf.Vec3f(*inertia))
-    api.CreatePrincipalAxesAttr(Gf.Quatf(1, 0, 0, 0))
+    return _add_visual_ref(stage, path, "./geometries.usdc", proto, xyz, quat)
 
 
 def build_robot(out: Path):
@@ -403,7 +234,7 @@ def build_robot(out: Path):
         cube = UsdGeom.Cube.Define(stage, f"/x500/body/collisions/{name}")
         cube.CreateSizeAttr(1.0)
         cube.CreateExtentAttr([(-0.5, -0.5, -0.5), (0.5, 0.5, 0.5)])
-        add_collider(stage, cube.GetPath(), cube, xyz, rpy_quat(rpy), size)
+        add_collider(stage, cube, xyz, rpy_quat(rpy), size)
 
     # ---- rotors and joints -------------------------------------------------
     UsdGeom.Scope.Define(stage, "/x500/joints")
@@ -422,7 +253,7 @@ def build_robot(out: Path):
         disc.CreateHeightAttr(ROTOR_DISC_HEIGHT)
         r, h = ROTOR_DISC_RADIUS, ROTOR_DISC_HEIGHT / 2
         disc.CreateExtentAttr([(-r, -r, -h), (r, r, h)])
-        add_collider(stage, disc.GetPath(), disc)
+        add_collider(stage, disc)
 
         # Motor model parameters travel with the asset as plain custom attributes.
         rotor.CreateAttribute("x500:motor:spinDirection", Sdf.ValueTypeNames.Int).Set(spin)
