@@ -1,0 +1,4 @@
+usd-core>=25.8
+pycollada
+numpy
+pillow
