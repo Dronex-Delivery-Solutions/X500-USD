@@ -94,11 +94,14 @@ def main() -> int:
         az = lidar.GetAttribute("omni:sensor:Core:emitterState:s001:azimuthDeg").Get()
         el = lidar.GetAttribute("omni:sensor:Core:emitterState:s001:elevationDeg").Get()
         ft = lidar.GetAttribute("omni:sensor:Core:emitterState:s001:fireTimeNs").Get()
-        mn = lidar.GetAttribute("minRange").Get()
-        mx = lidar.GetAttribute("maxRange").Get()
+        mn = lidar.GetAttribute("omni:sensor:Core:nearRangeM").Get()
+        mx = lidar.GetAttribute("omni:sensor:Core:farRangeM").Get()
+        n_channels = lidar.GetAttribute("omni:sensor:Core:numberOfChannels").Get()
         check(az is not None and len(az) == len(el) == len(ft) and len(az) > 0,
               f"{lidar.GetName()}: emitter arrays present and equal length ({len(az) if az else 0} beams)")
-        check(mn is not None and mx is not None and 0 < mn < mx, f"{lidar.GetName()}: 0 < minRange({mn}) < maxRange({mx})")
+        check(mn is not None and mx is not None and 0 < mn < mx, f"{lidar.GetName()}: 0 < nearRangeM({mn}) < farRangeM({mx})")
+        check(n_channels == len(az), f"{lidar.GetName()}: numberOfChannels({n_channels}) matches beam count({len(az) if az else 0})")
+        check(lidar.GetTypeName() == "OmniLidar", f"{lidar.GetName()}: prim type is OmniLidar, not {lidar.GetTypeName()}")
         if ft and len(ft) > 1:
             check(all(b >= a for a, b in zip(ft, ft[1:])), f"{lidar.GetName()}: fireTimeNs non-decreasing")
 
@@ -109,6 +112,8 @@ def main() -> int:
         near, far = c.GetClippingRangeAttr().Get()
         check(focal and focal > 0 and h_ap and h_ap > 0, f"{cam.GetName()}: positive focal length ({focal}) and aperture ({h_ap})")
         check(0 < near < far, f"{cam.GetName()}: 0 < near({near}) < far({far})")
+        check("OmniSensorAPI" in str(cam.GetPrim().GetMetadata("apiSchemas") or ""),
+              f"{cam.GetName()}: OmniSensorAPI applied (required by RtxCamera - confirmed live)")
 
     meshes = [p for p in everything if p.IsA(UsdGeom.Mesh)]
     unbound = [str(m.GetPath()) for m in meshes if not UsdShade.MaterialBindingAPI(m).ComputeBoundMaterial()[0]]

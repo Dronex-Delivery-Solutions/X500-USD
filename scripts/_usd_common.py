@@ -253,11 +253,22 @@ def add_mass(prim, mass, inertia, center_of_mass=(0, 0, 0)):
 FORWARD_CAMERA_ROTATION = np.array([[0, 0, -1], [-1, 0, 0], [0, 1, 0]], dtype=float)
 
 
-def add_camera(stage, path, xyz, focal_length, h_aperture, v_aperture, clip_range, extra_rotation=None):
+def add_camera(
+    stage, path, xyz, focal_length, h_aperture, v_aperture, clip_range, extra_rotation=None,
+    tick_rate=None, model_name="", model_vendor="", market_name="",
+):
     """A UsdGeom.Camera aimed at body-forward (+X) by default - pass
     extra_rotation (a 3x3 matrix, applied in body/mount frame, same
     convention as rpy_matrix) for a camera mounted at some other angle,
     e.g. straight down.
+
+    Also applies OmniSensorAPI (Isaac Sim 6's RtxCamera requires this on an
+    existing prim it wraps - confirmed against a live Isaac Sim 6.0.0 by
+    diffing this function's output against RtxCamera("/path") creating its
+    own camera from scratch: same prim type ("Camera"), same base
+    attributes; the only thing missing before this fix was the schema and
+    its tickRate/model* attributes, all plain data, nothing that needs
+    Isaac Sim to author).
     """
     cam = UsdGeom.Camera.Define(stage, path)
     cam.CreateFocalLengthAttr(float(focal_length))
@@ -266,22 +277,51 @@ def add_camera(stage, path, xyz, focal_length, h_aperture, v_aperture, clip_rang
     cam.CreateClippingRangeAttr(Gf.Vec2f(*clip_range))
     rotation = FORWARD_CAMERA_ROTATION if extra_rotation is None else extra_rotation @ FORWARD_CAMERA_ROTATION
     set_pose(cam.GetPrim(), xyz, matrix_to_quat(rotation))
+
+    prim = cam.GetPrim()
+    prim.AddAppliedSchema("OmniSensorAPI")
+    prim.CreateAttribute("omni:sensor:tickRate", Sdf.ValueTypeNames.Float).Set(
+        30.0 if tick_rate is None else float(tick_rate)
+    )
+    prim.CreateAttribute("omni:sensor:modelName", Sdf.ValueTypeNames.String).Set(model_name)
+    prim.CreateAttribute("omni:sensor:modelVendor", Sdf.ValueTypeNames.String).Set(model_vendor)
+    prim.CreateAttribute("omni:sensor:marketName", Sdf.ValueTypeNames.String).Set(market_name)
     return cam
 
 
-def add_generic_lidar(stage, path, min_range, max_range, azimuth_deg, elevation_deg, scan_period_s,
-                       horizontal_fov=None, vertical_fov=0.0, draw_points=True):
-    """Author an OmniSensorGenericLidarCoreAPI prim (Isaac Sim 6's custom-scan-
-    pattern lidar authoring path, documented in the isaac-sim-sensor skill).
+def add_generic_lidar(stage, path, min_range, max_range, azimuth_deg, elevation_deg, scan_period_s):
+    """Author an OmniLidar prim with OmniSensorGenericLidarCoreAPI (Isaac
+    Sim 6's custom-scan-pattern lidar authoring path).
 
-    This schema is a proprietary Kit/Isaac Sim extension, not part of
-    OpenUSD - it is not registered in plain `usd-core`, so this function
-    cannot validate it the way the UsdPhysics calls elsewhere in this file
-    are validated. It authors exactly the attribute names and the
-    apiSchemas token the skill documents, as plain (schema-less) USD
-    metadata/attributes, which round-trip correctly through any USD writer
-    and are picked up by Isaac Sim's own schema plugin at load time. This
-    has NOT been confirmed to work by loading it in Isaac Sim.
+    Corrected against a live Isaac Sim 6.0.0: `isaacsim.sensors.experimental
+    .rtx.Lidar.create()` was used to make a real reference lidar, and this
+    function's output was diffed against it attribute-for-attribute. Two
+    real mistakes from going off the isaac-sim-sensor skill's documentation
+    alone (its example is illustrative, not the literal schema):
+
+    - The prim's actual USD type must be "OmniLidar", not "Xform" with the
+      API schema merely applied - Lidar() checks prim.GetTypeName() and
+      refused the old Xform-based version outright
+      (ValueError("...is not an 'OmniLidar' prim but a 'Xform' prim")).
+      usd-core has never heard of "OmniLidar" (it is a proprietary Kit
+      schema, same as the API schema itself), but USD lets you label a
+      prim with an unregistered typeName anyway - DefinePrim(path,
+      "OmniLidar") - and Isaac Sim's own registered schema then supplies
+      the fallback values for every attribute this function does not set,
+      exactly as it would for a prim the schema's own Define() created.
+    - minRange/maxRange/horizontalFov/horizontalResolution/verticalFov/
+      verticalResolution/highLod/drawPoints do not exist in the real
+      schema at all (confirmed absent from Lidar.create()'s ~70-attribute
+      dump) - they sat as inert custom attributes doing nothing. The real
+      names are omni:sensor:Core:nearRangeM/farRangeM; everything else
+      (scan pattern, noise, intensity model, ...) is schema-fallback
+      defaults this function does not override.
+
+    The emitter-state attribute names (omni:sensor:Core:emitterState:s001:
+    azimuthDeg/elevationDeg/fireTimeNs) and the applied-schema token were
+    already correct the first time - confirmed by GetAppliedSchemas()
+    matching Lidar.create()'s reference exactly - this only fixes the
+    prim's type and the range attribute names.
 
     azimuth_deg, elevation_deg: one beam direction per array entry (same
     length). fireTimeNs is spread evenly across one scan period so beams
@@ -291,30 +331,25 @@ def add_generic_lidar(stage, path, min_range, max_range, azimuth_deg, elevation_
     """
     n = len(azimuth_deg)
     assert len(elevation_deg) == n
-    fire_time_ns = (np.arange(n) * (scan_period_s * 1e9 / max(n, 1))).astype(np.int64)
+    fire_time_ns = (np.arange(n) * (scan_period_s * 1e9 / max(n, 1))).astype(np.uint32)
 
-    prim = UsdGeom.Xform.Define(stage, path).GetPrim()
+    prim = stage.DefinePrim(path, "OmniLidar")
     prim.AddAppliedSchema("OmniSensorGenericLidarCoreAPI")
-    prim.CreateAttribute("minRange", Sdf.ValueTypeNames.Float).Set(float(min_range))
-    prim.CreateAttribute("maxRange", Sdf.ValueTypeNames.Float).Set(float(max_range))
-    prim.CreateAttribute("horizontalFov", Sdf.ValueTypeNames.Float).Set(
-        float(horizontal_fov if horizontal_fov is not None else azimuth_deg.max() - azimuth_deg.min())
+    prim.CreateAttribute("omni:sensor:Core:nearRangeM", Sdf.ValueTypeNames.Float).Set(float(min_range))
+    prim.CreateAttribute("omni:sensor:Core:farRangeM", Sdf.ValueTypeNames.Float).Set(float(max_range))
+    prim.CreateAttribute("omni:sensor:Core:numberOfChannels", Sdf.ValueTypeNames.UInt).Set(n)
+    prim.CreateAttribute("omni:sensor:Core:numberOfEmitters", Sdf.ValueTypeNames.UInt).Set(n)
+    prim.CreateAttribute("omni:sensor:Core:emitterState:s001:channelId", Sdf.ValueTypeNames.UIntArray).Set(
+        Vt.UIntArray.FromNumpy(np.arange(1, n + 1, dtype=np.uint32))
     )
-    prim.CreateAttribute("horizontalResolution", Sdf.ValueTypeNames.Float).Set(
-        float(abs(azimuth_deg[1] - azimuth_deg[0])) if n > 1 else 1.0
-    )
-    prim.CreateAttribute("verticalFov", Sdf.ValueTypeNames.Float).Set(float(vertical_fov))
-    prim.CreateAttribute("verticalResolution", Sdf.ValueTypeNames.Float).Set(1.0)
-    prim.CreateAttribute("highLod", Sdf.ValueTypeNames.Bool).Set(True)
-    prim.CreateAttribute("drawPoints", Sdf.ValueTypeNames.Bool).Set(bool(draw_points))
     prim.CreateAttribute("omni:sensor:Core:emitterState:s001:azimuthDeg", Sdf.ValueTypeNames.FloatArray).Set(
         Vt.FloatArray.FromNumpy(azimuth_deg.astype(np.float32))
     )
     prim.CreateAttribute("omni:sensor:Core:emitterState:s001:elevationDeg", Sdf.ValueTypeNames.FloatArray).Set(
         Vt.FloatArray.FromNumpy(elevation_deg.astype(np.float32))
     )
-    prim.CreateAttribute("omni:sensor:Core:emitterState:s001:fireTimeNs", Sdf.ValueTypeNames.IntArray).Set(
-        Vt.IntArray.FromNumpy(fire_time_ns.astype(np.int32))
+    prim.CreateAttribute("omni:sensor:Core:emitterState:s001:fireTimeNs", Sdf.ValueTypeNames.UIntArray).Set(
+        Vt.UIntArray.FromNumpy(fire_time_ns)
     )
     return prim
 

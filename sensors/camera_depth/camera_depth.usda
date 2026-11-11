@@ -27,11 +27,17 @@ def Xform "x500" (
             doc = "OAK-D Lite RGB + depth cameras, forward-facing. Not a separate rigid body (mounted rigidly on /x500/body, same frame) - capture them with isaacsim.sensors.experimental.rtx, not Pegasus's MonocularCamera; see sensors/README.md."
         )
         {
-            def Camera "rgb"
+            def Camera "rgb" (
+                prepend apiSchemas = ["OmniSensorAPI"]
+            )
             {
                 float2 clippingRange = (0.1, 100)
                 float focalLength = 0.015249385
                 float horizontalAperture = 0.020955
+                custom string omni:sensor:marketName = "OAK-D Lite"
+                custom string omni:sensor:modelName = "IMX214"
+                custom string omni:sensor:modelVendor = "Luxonis"
+                custom float omni:sensor:tickRate = 30
                 float verticalAperture = 0.011787187
                 quatd xformOp:orient = (-0.5000000000000002, -0.5, 0.5, 0.5)
                 double3 xformOp:scale = (1, 1, 1)
@@ -39,11 +45,17 @@ def Xform "x500" (
                 uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
             }
 
-            def Camera "depth"
+            def Camera "depth" (
+                prepend apiSchemas = ["OmniSensorAPI"]
+            )
             {
                 float2 clippingRange = (0.2, 19.1)
                 float focalLength = 0.014160867
                 float horizontalAperture = 0.020955
+                custom string omni:sensor:marketName = "OAK-D Lite"
+                custom string omni:sensor:modelName = "StereoOV7251"
+                custom string omni:sensor:modelVendor = "Luxonis"
+                custom float omni:sensor:tickRate = 30
                 float verticalAperture = 0.01571625
                 quatd xformOp:orient = (-0.5000000000000002, -0.5, 0.5, 0.5)
                 double3 xformOp:scale = (1, 1, 1)

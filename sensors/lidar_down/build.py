@@ -134,9 +134,6 @@ def build(mesh_src: Path, out_dir: Path):
         azimuth_deg=np.array([0.0]),
         elevation_deg=np.array([0.0]),
         scan_period_s=1.0 / UPDATE_RATE,
-        horizontal_fov=0.0,
-        vertical_fov=0.0,
-        draw_points=True,
     )
 
     add_fixed_joint(

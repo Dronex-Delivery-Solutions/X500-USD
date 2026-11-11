@@ -142,9 +142,6 @@ def build(mesh_src: Path, out_dir: Path):
         azimuth_deg=azimuth,
         elevation_deg=np.zeros(SAMPLES),
         scan_period_s=1.0 / UPDATE_RATE,
-        horizontal_fov=2 * HALF_FOV_DEG,
-        vertical_fov=0.0,
-        draw_points=False,  # 1080 points/frame - too dense to draw by default
     )
     set_pose(stage.GetPrimAtPath("/x500/lidar_2d_front/sensor"), (0, 0, SENSOR_LOCAL_Z_OFFSET))
 

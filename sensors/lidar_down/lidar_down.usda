@@ -48,21 +48,18 @@ def Xform "x500" (
             uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
         }
 
-        def Xform "sensor" (
+        def OmniLidar "sensor" (
             prepend apiSchemas = ["OmniSensorGenericLidarCoreAPI"]
         )
         {
-            custom bool drawPoints = 1
-            custom bool highLod = 1
-            custom float horizontalFov = 0
-            custom float horizontalResolution = 1
-            custom float maxRange = 100
-            custom float minRange = 0.1
             custom float[] omni:sensor:Core:emitterState:s001:azimuthDeg = [0]
+            custom uint[] omni:sensor:Core:emitterState:s001:channelId = [1]
             custom float[] omni:sensor:Core:emitterState:s001:elevationDeg = [0]
-            custom int[] omni:sensor:Core:emitterState:s001:fireTimeNs = [0]
-            custom float verticalFov = 0
-            custom float verticalResolution = 1
+            custom uint[] omni:sensor:Core:emitterState:s001:fireTimeNs = [0]
+            custom float omni:sensor:Core:farRangeM = 100
+            custom float omni:sensor:Core:nearRangeM = 0.1
+            custom uint omni:sensor:Core:numberOfChannels = 1
+            custom uint omni:sensor:Core:numberOfEmitters = 1
         }
     }
 

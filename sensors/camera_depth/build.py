@@ -55,9 +55,9 @@ SENSOR_XYZ = tuple(a + b for a, b in zip(HOUSING_POSE_XYZ, SENSOR_LOCAL_OFFSET))
 APERTURE_MM = 20.955
 
 CAMERAS = {
-    # name, resolution (w, h), horizontal_fov (rad), clip (near, far)
-    "rgb": ((1920, 1080), 1.204, (0.1, 100.0)),
-    "depth": ((640, 480), 1.274, (0.2, 19.1)),
+    # name, resolution (w, h), horizontal_fov (rad), clip (near, far), sensor model
+    "rgb": ((1920, 1080), 1.204, (0.1, 100.0), "IMX214"),
+    "depth": ((640, 480), 1.274, (0.2, 19.1), "StereoOV7251"),
 }
 
 
@@ -117,7 +117,7 @@ def build(mesh_src: Path, out_dir: Path):
         "isaacsim.sensors.experimental.rtx, not Pegasus's MonocularCamera; "
         "see sensors/README.md."
     )
-    for name, (resolution, h_fov, clip) in CAMERAS.items():
+    for name, (resolution, h_fov, clip, model) in CAMERAS.items():
         w, h = resolution
         focal = focal_length_mm(h_fov, APERTURE_MM) / 1000.0  # mm -> m (meter stage)
         add_camera(
@@ -128,6 +128,10 @@ def build(mesh_src: Path, out_dir: Path):
             h_aperture=APERTURE_MM / 1000.0,
             v_aperture=APERTURE_MM / 1000.0 * h / w,
             clip_range=clip,
+            tick_rate=30.0,  # matches the SDF's update_rate for both sensors
+            model_name=model,
+            model_vendor="Luxonis",
+            market_name="OAK-D Lite",
         )
 
     stage.GetRootLayer().Save()
